@@ -1,0 +1,128 @@
+#!/bin/bash
+#PBS -N MeRIP-seq
+#PBS -l nodes=node02:ppn=30
+#PBS -l walltime=100000:00:00
+#PBS -j n
+#PBS -q batch
+#PBS -e ${PBS_JOBNAME}.err
+#PBS -o ${PBS_JOBNAME}.out
+
+cd $PBS_O_WORKDIR
+
+#for prefix in GM12878_MeRIPseq_ChrRNA_20220725_B1S2 GM12878_MeRIPseq_ChrRNA_input_20220725_B1S2 GM12878_MeRIPseq_ChrRNA_20220815_B2S2 GM12878_MeRIPseq_ChrRNA_input_20220815_B2S2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_20220725_B1S2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_input_20220725_B1S2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_20220815_B2S2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_input_20220815_B2S2
+for prefix in GM12878_MeRIPseq_ChrRNA_20220725_B1 GM12878_MeRIPseq_ChrRNA_input_20220725_B1 GM12878_MeRIPseq_ChrRNA_20220815_B2 GM12878_MeRIPseq_ChrRNA_input_20220815_B2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_20220725_B1 GM12878_SA2KOA13_MeRIPseq_ChrRNA_input_20220725_B1 GM12878_SA2KOA13_MeRIPseq_ChrRNA_20220815_B2 GM12878_SA2KOA13_MeRIPseq_ChrRNA_input_20220815_B2
+do
+PREFIX=${prefix}_cutadapt
+
+#cd /data2/TangLabData/ProcessedData/MeRIP-seq
+cd /data/xinyu/CohesinProject/MeRIP-seq/01mapping
+mkdir ${PREFIX}
+cd ${PREFIX}
+
+# # merger B1 and B1S2 data
+# zcat /data2/TangLabData/RawData/MeRIP-seq/${prefix%%S2}/${prefix%%S2}_R1.fq.gz /data2/TangLabData/RawData/MeRIP-seq/${prefix}/${prefix}_R1.fq.gz|gzip - >${prefix}_R1.fq.gz
+# zcat /data2/TangLabData/RawData/MeRIP-seq/${prefix%%S2}/${prefix%%S2}_R2.fq.gz /data2/TangLabData/RawData/MeRIP-seq/${prefix}/${prefix}_R2.fq.gz|gzip - >${prefix}_R2.fq.gz
+
+zcat /data2/TangLabData/RawData/MeRIP-seq/${prefix}/${prefix}_R2.fq.gz | awk '{if(NR%4==2 || NR%4==0) print substr($0,4);else print $0;}' | gzip - > removeGGG_R2.fq.gz
+
+##############################################
+## cutadapt
+cutadapt=/usr/bin/cutadapt
+R1seq="CCCAGATCGGAAGAGC"
+R2seq="AGATCGGAAGAGC"
+
+inputFQ1=/data2/TangLabData/RawData/MeRIP-seq/${prefix}/${prefix}_R1.fq.gz
+inputFQ2=removeGGG_R2.fq.gz
+
+outputFQ1=R1.fq.gz
+outputFQ2=R2.fq.gz
+
+${cutadapt} \
+-b ${R1seq} \
+-o ${outputFQ1} --info-file FQ1infor.txt ${inputFQ1} > FQ1cutadapt.log 2>&1
+
+${cutadapt} \
+-b ${R2seq} \
+-o ${outputFQ2} --info-file FQ2infor.txt ${inputFQ2} > FQ2cutadapt.log 2>&1
+
+
+##############################################
+## Tools
+hisat2=/data/public/software/hisat2-2.1.0/hisat2
+samtools=/data/public/software/samtools-1.3.1/samtools
+bedtools=/data/public/software/bedtools.2.25.0/bin/bedtools
+bedGraphToBigWig=/home/yuhan/Software/others/bin/bedGraphToBigWig
+cpu_num=30
+
+## GENOME information
+GENOME=/data/public/refGenome/hisat2_index/hg38/hg38
+GENOME_SIZE=/data/public/refGenome/bwa_index/hg38/ChromInfo.txt
+GENOME_ANNOTATION=/data1/tang/3D_evolution/primates_annotation/hg38/Homo_sapiens.GRCh38.97_withchr.gtf
+
+##############################################
+## R1 and R2
+fastq_1=R1.fq.gz
+fastq_2=R2.fq.gz
+
+## mapping
+${hisat2} -x ${GENOME} -1 ${fastq_1} -2 ${fastq_2} -p ${cpu_num} -S ${PREFIX}.sam --rna-strandness RF
+
+## sam2bam
+${samtools} view -b -o ${PREFIX}.bam -@ ${cpu_num} - < ${PREFIX}.sam
+
+## sort bam by coordinate
+${samtools} sort --threads ${cpu_num} -o ${PREFIX}.sorted.bam ${PREFIX}.bam
+
+## delete unsorted sam
+rm ${PREFIX}.sam
+rm ${PREFIX}.bam
+
+## unique map
+${samtools} view -b -o ${PREFIX}.uniq.bam -q 20 -@ ${cpu_num} ${PREFIX}.sorted.bam
+${samtools} index ${PREFIX}.uniq.bam
+
+## remove data
+rm ${prefix}_R1.fq.gz
+rm ${prefix}_R2.fq.gz
+rm removeGGG_R2.fq.gz
+#rm R1.fq.gz
+#rm R2.fq.gz
+rm *infor.txt
+
+## counting library-type
+# htseq-count -f bam -r pos -t exon --max-reads-in-buffer 1000000000 --stranded reverse -m union ${PREFIX}.uniq.bam ${GENOME_ANNOTATION} > ${PREFIX}.count 2>${PREFIX}.counting.log
+
+## read bam convered to bed and calculate coverage
+#${bedtools} bamtobed -split -i ${PREFIX}.uniq.bam | awk '$5>=20{if($1!~"[_M]") print $0;}' | LANG=C sort -k1,1 -k2,2n > ${PREFIX}.bed
+#${bedtools} genomecov -bg -i ${PREFIX}.bed -g ${GENOME_SIZE} > ${PREFIX}.bedgraph
+#${bedGraphToBigWig} ${PREFIX}.bedgraph ${GENOME_SIZE} ${PREFIX}.bigwig
+
+##############################################################################################
+echo -e "spliting strand-specific reads\n"
+
+if [ -f ${PREFIX}.bed12 ]; then
+    rm ${PREFIX}.bed12
+fi
+
+for index in `awk '($1!~/M/)&&($1!~/_/){print $1}' ${GENOME_SIZE}`
+do
+    echo "Processing chr${index}..."
+
+    ${samtools} view -b -o ${PREFIX}.flag64_first.bam -f 64 ${PREFIX}.uniq.bam ${index}
+    ${samtools} view -b -o ${PREFIX}.flag128_second.bam -f 128 ${PREFIX}.uniq.bam ${index}
+
+    ${bedtools} bamtobed -bed12 -i ${PREFIX}.flag128_second.bam > ${PREFIX}.tmp.bed12
+    ${bedtools} bamtobed -bed12 -i ${PREFIX}.flag64_first.bam | perl -lane 'if( $F[5] eq "+" ){ $F[5] = "-"; print join( "\t", @F ) } else { $F[5] = "+"; print join( "\t", @F ) }' >> ${PREFIX}.tmp.bed12
+
+    cat ${PREFIX}.tmp.bed12 | LANG=C sort -k1,1 -k2,2n >> ${PREFIX}.bed12
+
+    rm ${PREFIX}.tmp.bed12
+    rm ${PREFIX}.flag64_first.bam
+    rm ${PREFIX}.flag128_second.bam
+done
+
+echo -e "Done"
+
+done
+
+

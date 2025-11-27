@@ -1,0 +1,12 @@
+#!/bin/bash
+
+#PBS -l nodes=node02:ppn=12,walltime=2000:00:00
+#PBS -N fastq.uniq
+
+cd $PBS_O_WORKDIR
+samtools view /data2/TangLabData/ProcessedData/scRNA-seq/Organoid_TLR_d31_merge_5scRNA_20220915_B1_B1S2/outs/possorted_genome_bam.bam | awk '{print $1}'>bam_readsID.txt
+zcat /data2/TangLabData/CleanData/scRNA-seq/Organoid_TLR_2_d31B_5scRNA_20220915_B1/Organoid_TLR_2_d31B_5scRNA_20220915_B1_R2.fq.gz | awk '/^@/{print $1}' > fastq_readsID.txt   
+zcat /data2/TangLabData/CleanData/scRNA-seq/Organoid_TLR_2_d31BL_5scRNA_20220915_B1/Organoid_TLR_2_d31BL_5scRNA_20220915_B1_R2.fq.gz | awk '/^@/{print $1}' >> fastq_readsID.txt
+zcat /data2/TangLabData/CleanData/scRNA-seq/Organoid_TLR_2_d31B_5scRNA_20220915_B1S2/Organoid_TLR_2_d31B_5scRNA_20220915_B1S2_R2.fq.gz | awk '/^@/{print $1}' >> fastq_readsID.txt
+sed -i 's/^@//' fastq_readsID.txt
+sort fastq_readsID.txt bam_readsID.txt bam_readsID.txt | uniq -u > uniq_readsID.txt
